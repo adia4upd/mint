@@ -65,7 +65,7 @@ export default function ApiKeysPage() {
 
       <button
         onClick={handleSave}
-        className="mt-8 h-9 px-5 rounded-md text-sm font-medium bg-[var(--text)] text-[var(--bg)] hover:opacity-90 transition"
+        className="mt-8 h-9 px-5 rounded-md text-sm font-medium bg-[var(--text)] text-[#0a0a0a] hover:opacity-90 transition"
       >
         {saved ? "저장 완료 ✓" : "저장"}
       </button>

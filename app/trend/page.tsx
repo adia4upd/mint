@@ -1,0 +1,210 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import {
+  DEFAULT_MODEL_ID,
+  isValidModelId,
+} from "../lib/models";
+
+const MODEL_STORAGE_KEY = "mint-chat-model";
+
+type SseEvent =
+  | { type: "status"; label: string }
+  | { type: "text"; text: string }
+  | { type: "search_result"; url: string; title: string }
+  | { type: "error"; message: string }
+  | { type: "done" };
+
+type Source = { url: string; title: string };
+
+const PRESETS = [
+  "20대 재테크 숏폼",
+  "AI 툴 리뷰 크리에이터",
+  "요리 숏폼 트렌드",
+  "자기계발 유튜브",
+];
+
+export default function TrendPage() {
+  const [keyword, setKeyword] = useState("");
+  const [modelId, setModelId] = useState<string>(DEFAULT_MODEL_ID);
+  const [status, setStatus] = useState<string | null>(null);
+  const [result, setResult] = useState("");
+  const [sources, setSources] = useState<Source[]>([]);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem(MODEL_STORAGE_KEY);
+    if (isValidModelId(saved)) setModelId(saved);
+  }, []);
+
+  const handleGenerate = async () => {
+    const k = keyword.trim();
+    if (!k || running) return;
+    setRunning(true);
+    setStatus(null);
+    setResult("");
+    setSources([]);
+    setError(null);
+    setCopied(false);
+
+    try {
+      const res = await fetch("/api/trend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keyword: k, model: modelId }),
+      });
+      if (!res.ok || !res.body) {
+        const errText = await res.text().catch(() => "");
+        throw new Error(errText || `HTTP ${res.status}`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const line = frame.trim();
+          if (!line.startsWith("data:")) continue;
+          try {
+            const e = JSON.parse(line.slice(5).trim()) as SseEvent;
+            if (e.type === "text") setResult((r) => r + e.text);
+            else if (e.type === "status") setStatus(e.label);
+            else if (e.type === "search_result") {
+              setSources((prev) =>
+                prev.some((s) => s.url === e.url)
+                  ? prev
+                  : [...prev, { url: e.url, title: e.title }],
+              );
+            } else if (e.type === "error") setError(e.message);
+          } catch {
+            // ignore malformed
+          }
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "요청 실패");
+    } finally {
+      setRunning(false);
+      setStatus(null);
+    }
+  };
+
+  const handleCopy = async () => {
+    if (!result) return;
+    try {
+      await navigator.clipboard.writeText(result);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // ignore
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      <header className="flex items-center justify-between px-6 h-14 border-b border-[var(--border)]">
+        <span className="text-sm font-medium">트렌드 조사</span>
+      </header>
+
+      <div className="flex-1 scroll-y">
+        <div className="max-w-3xl mx-auto w-full px-6 py-8 flex flex-col gap-6">
+          <section className="flex flex-col gap-2">
+            <label className="text-sm font-medium">키워드 · 주제</label>
+            <input
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleGenerate();
+              }}
+              placeholder="예) 20대 재테크 숏폼, AI 툴 리뷰, 요리 숏폼 트렌드"
+              className="h-11 rounded-xl border border-[var(--border)] bg-[var(--panel)] px-4 text-sm outline-none focus:border-[var(--text)]"
+            />
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {PRESETS.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setKeyword(p)}
+                  className="h-7 px-3 rounded-md text-xs border border-[var(--border)] bg-[var(--panel)] hover:bg-[var(--hover)]"
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <div className="flex items-center justify-end">
+            <button
+              type="button"
+              onClick={handleGenerate}
+              disabled={!keyword.trim() || running}
+              className="h-9 px-4 rounded-md text-sm font-medium bg-white text-black disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              {running ? "조사 중…" : "트렌드 조사"}
+            </button>
+          </div>
+
+          {(result || error || status || sources.length > 0) && (
+            <section className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium">결과</label>
+                <button
+                  type="button"
+                  onClick={handleCopy}
+                  disabled={!result}
+                  className="h-8 px-3 rounded-md text-xs hover:bg-[var(--hover)] disabled:opacity-30"
+                >
+                  {copied ? "복사됨" : "복사"}
+                </button>
+              </div>
+              {status && !result && (
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--hover)] px-4 py-3 text-sm text-[var(--text-muted)] italic">
+                  {status}
+                </div>
+              )}
+              {error && (
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--hover)] px-4 py-3 text-sm text-[var(--text)]">
+                  [에러] {error}
+                </div>
+              )}
+              {sources.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  <div className="text-[11px] text-[var(--text-muted)]">
+                    출처 {sources.length}개
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {sources.map((s, i) => (
+                      <a
+                        key={i}
+                        href={s.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[11px] px-2 py-1 rounded-md bg-[var(--panel)] border border-[var(--border)] hover:bg-[var(--hover)] text-[var(--text)] max-w-[18rem] truncate"
+                        title={s.url}
+                      >
+                        {s.title}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {result && (
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--panel)] px-5 py-4 text-sm leading-7 whitespace-pre-wrap">
+                  {result}
+                </div>
+              )}
+            </section>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
